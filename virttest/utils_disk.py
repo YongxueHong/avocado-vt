@@ -402,18 +402,6 @@ def create_partition_linux(session, did, size, start,
     for info in session.cmd(mkpart_cmd).splitlines():
         if 'Warning' in info:
             logging.warn(info)
-    # try:
-    #     for info in session.cmd(mkpart_cmd).splitlines():
-    #         if 'Warning' in info:
-    #             logging.warn(info)
-    # except ShellCmdError as e:
-    #     if ignore_out:
-    #         if re.findall(r'The location \d+ is outside of the device', e.output):
-    #             mkpart_cmd = 'parted -s "%s" unit %s mkpart %s %s 100% print'
-    #             mkpart_cmd %= ("/dev/%s" % did, 'B', part_type, start)
-    #             session.cmd(mkpart_cmd)
-    #     else:
-    #         raise ShellCmdError
     session.cmd(partprobe_cmd, timeout=timeout)
     logging.debug(session.cmd_output('parted -s /dev/%s unit %s print' % (did, 'MiB')))
     logging.debug(session.cmd_output('parted -s /dev/%s unit %s print' % (did, 'MB')))
