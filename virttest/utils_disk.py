@@ -25,6 +25,8 @@ from virttest import error_context
 from virttest import utils_numeric
 from virttest.compat_52lts import decode_to_text
 
+from aexpect import ShellCmdError, ShellStatusError
+
 PARTITION_TABLE_TYPE_MBR = "msdos"
 PARTITION_TABLE_TYPE_GPT = "gpt"
 PARTITION_TYPE_PRIMARY = "primary"
@@ -202,7 +204,7 @@ def get_linux_disks(session, partition=False):
     """
     list_disk_cmd = "lsblk -o KNAME,SIZE,TYPE,SERIAL,WWN"
     get_disk_name_cmd = "lsblk -no pkname /dev/%s"
-    output = session.cmd_output(list_disk_cmd)
+    output = str(session.cmd_output(list_disk_cmd))
     devs = output.splitlines()
     disks_dict = {}
     part_dict = {}
@@ -216,7 +218,7 @@ def get_linux_disks(session, partition=False):
         disks_dict = dict(disks_dict, **part_dict)
     else:
         for part in part_dict.keys():
-            output = session.cmd_output(get_disk_name_cmd % part)
+            output = str(session.cmd_output(get_disk_name_cmd % part))
             disk = output.splitlines()[0].strip()
             if disk in disks_dict.keys():
                 disks_dict.pop(disk)
@@ -240,7 +242,7 @@ def get_windows_disks_index(session, image_size):
     list_disk_cmd += " && echo exit >> " + disk
     list_disk_cmd += " && diskpart /s " + disk
     list_disk_cmd += " && del /f " + disk
-    disks = session.cmd_output(list_disk_cmd)
+    disks = str(session.cmd_output(list_disk_cmd))
     size_type = image_size[-1] + "B"
     if size_type == "MB":
         disk_size = image_size[:-1] + " MB"
@@ -362,7 +364,8 @@ def create_partition_table(session, did, labeltype, ostype):
 
 
 def create_partition_linux(session, did, size, start,
-                           part_type=PARTITION_TYPE_PRIMARY, timeout=360):
+                           part_type=PARTITION_TYPE_PRIMARY,
+                           timeout=360):
     """
     Create single partition on disk in linux guest.
 
@@ -371,16 +374,49 @@ def create_partition_linux(session, did, size, start,
     :param size: partition size. e.g. 200M
     :param start: partition beginning at start. e.g. 0M
     :param part_type: partition type, primary extended logical
+    #:param ignore_out: will ignore error partition size is outside of the disk free size.
     :param timeout: Timeout for cmd execution in seconds.
     """
-    size = utils_numeric.normalize_data_size(size, order_magnitude="M") + "M"
-    start = utils_numeric.normalize_data_size(start, order_magnitude="M") + "M"
-    end = str(float(start[:-1]) + float(size[:-1])) + size[-1]
+    if len(re.findall(r'i', size + start)) == 1:
+        raise TypeError(
+            'Can not create partition with difference unit '
+            'between size(%s) and start(%s).' % (size, start))
+    if 'i' in (size + start):
+        factor = '1024'
+    else:
+        factor = '1000'
+    # unit = re.findall(r'\w+$', size)[0]
+    size = utils_numeric.normalize_data_size(size, order_magnitude="B", factor=factor)[:-1]
+    start = utils_numeric.normalize_data_size(start, order_magnitude="B", factor=factor)[:-1]
+    logging.debug('===>size align_before: %s' % size)
+    logging.debug('===>start align_before: %s' % start)
+    size = utils_numeric.align_value(size, 512)
+    start = utils_numeric.align_value(start, 512)
+    logging.debug('===>size align_after: %s' % size)
+    logging.debug('===>start align_after: %s' % start)
+    # end = str(float(start[:-1]) + float(size[:-1])) + size[-1]
+    end = str(int(float(start) + float(size)))
     partprobe_cmd = "partprobe /dev/%s" % did
-    mkpart_cmd = 'parted -s "%s" mkpart %s %s %s'
-    mkpart_cmd %= ("/dev/%s" % did, part_type, start, end)
-    session.cmd(mkpart_cmd)
+    mkpart_cmd = 'parted -s "%s" unit %s mkpart %s %s %s print'
+    mkpart_cmd %= ("/dev/%s" % did, 'B', part_type, start, end)
+    for info in session.cmd(mkpart_cmd).splitlines():
+        if 'Warning' in info:
+            logging.warn(info)
+    # try:
+    #     for info in session.cmd(mkpart_cmd).splitlines():
+    #         if 'Warning' in info:
+    #             logging.warn(info)
+    # except ShellCmdError as e:
+    #     if ignore_out:
+    #         if re.findall(r'The location \d+ is outside of the device', e.output):
+    #             mkpart_cmd = 'parted -s "%s" unit %s mkpart %s %s 100% print'
+    #             mkpart_cmd %= ("/dev/%s" % did, 'B', part_type, start)
+    #             session.cmd(mkpart_cmd)
+    #     else:
+    #         raise ShellCmdError
     session.cmd(partprobe_cmd, timeout=timeout)
+    logging.debug(session.cmd_output('parted -s /dev/%s unit %s print' % (did, 'MiB')))
+    logging.debug(session.cmd_output('parted -s /dev/%s unit %s print' % (did, 'MB')))
 
 
 def create_partition_windows(session, did, size, start,
@@ -427,11 +463,11 @@ def delete_partition_linux(session, partition_name, timeout=360):
     remove single partition for one disk.
 
     :param session: session object to guest.
-    :param partition_name: partition name. e.g. sdb1
+    :param partition_name: partition name. e.g. sdb1, nvme0n1p1
     :param timeout: Timeout for cmd execution in seconds.
     """
     get_kname_cmd = "lsblk -no pkname /dev/%s"
-    kname = session.cmd_output(get_kname_cmd % partition_name)
+    kname = session.cmd_output(get_kname_cmd % partition_name).rstrip()
     list_disk_cmd = "lsblk -o KNAME,MOUNTPOINT"
     output = session.cmd_output(list_disk_cmd)
     output = output.splitlines()
@@ -444,7 +480,7 @@ def delete_partition_linux(session, partition_name, timeout=360):
                     err_msg = "Failed to umount partition '%s'"
                     raise exceptions.TestError(err_msg % partition_name)
             break
-    session.cmd(rm_cmd % (kname, partition[0]))
+    session.cmd(rm_cmd % (kname, re.findall(r'\d+$', partition_name)[0]))
     session.cmd("partprobe /dev/%s" % kname, timeout=timeout)
 
 
@@ -621,7 +657,7 @@ def set_drive_letter(session, did, partition_no=1):
     session.cmd(assign_letter_cmd % (did, partition_no))
     detail_cmd = ' echo detail disk '
     detail_cmd = _wrap_windows_cmd(detail_cmd)
-    details = session.cmd_output(detail_cmd % did)
+    details = str(session.cmd_output(detail_cmd % did))
     for line in details.splitlines():
         pattern = "\s+Volume\s+\d+"
         if re.search(pattern, line, re.I | re.M):
@@ -659,7 +695,7 @@ def configure_empty_windows_disk(session, did, size, start="0M",
 
     :param session: session object to guest.
     :param did: disk index which show in 'diskpart list disk'.
-    :param size: partition size. e.g. 500M
+    :param size: size of total partitions. e.g. 50G
     :param start: partition beginning at start. e.g. 0M
     :param n_partitions: the number of partitions on disk
     :param fstype: filesystem type for the disk.
@@ -711,7 +747,7 @@ def configure_empty_linux_disk(session, did, size, start="0M", n_partitions=1,
 
     :param session: session object to guest.
     :param did: disk kname. e.g. sdb
-    :param size: partition size. e.g. 2G
+    :param size: size of total partitions. e.g. 20G
     :param start: partition beginning at start. e.g. 0G
     :param n_partitions: the number of partitions on disk
     :param fstype: filesystem type for the disk.
@@ -721,10 +757,30 @@ def configure_empty_linux_disk(session, did, size, start="0M", n_partitions=1,
     """
     mountpoint = []
     create_partition_table_linux(session, did, labeltype)
-    size = utils_numeric.normalize_data_size(size, order_magnitude="M") + "M"
-    start = float(utils_numeric.normalize_data_size(start, order_magnitude="M"))
+
+    if len(re.findall(r'i', size + start)) == 1:
+        raise TypeError(
+            'Can not create partition with difference unit '
+            'between size(%s) and start(%s).' % (size, start))
+    if 'i' in (size + start):
+        factor = '1024'
+    else:
+        factor = '1000'
+    size = utils_numeric.normalize_data_size(size, order_magnitude="B", factor=factor)
+    start = float(utils_numeric.normalize_data_size(start, order_magnitude="B", factor=factor)[:-1])
+    #
+    # size = utils_numeric.align_value(size, 512)
+    start = utils_numeric.align_value(start, 512)
+
+    # size = utils_numeric.normalize_data_size(size, order_magnitude="M") + "M"
+    # start = float(utils_numeric.normalize_data_size(start, order_magnitude="M"))
     partition_size = float(size[:-1]) / n_partitions
+    partition_size = utils_numeric.align_value(partition_size, 512)
     extended_size = float(size[:-1]) - partition_size
+    extended_size = utils_numeric.align_value(extended_size, 512)
+
+    # extended_size = float(size[:-1]) - partition_size
+
     if labeltype == PARTITION_TABLE_TYPE_MBR and n_partitions > 1:
         part_type = PARTITION_TYPE_EXTENDED
     else:
@@ -745,7 +801,7 @@ def configure_empty_linux_disk(session, did, size, start="0M", n_partitions=1,
             else:
                 create_partition_linux(session, did, str(partition_size) + size[-1],
                                        str(start) + size[-1], part_type, timeout)
-        start += partition_size
+        start = start + float(partition_size) +  float(512)
         post_partition = get_linux_disks(session, partition=True).keys()
         new_partition = list(set(post_partition) - set(pre_partition))[0]
         create_filesyetem_linux(session, new_partition, fstype, timeout)
