@@ -1,5 +1,8 @@
 from __future__ import division
+import re
 import math
+from decimal import Decimal
+from decimal import getcontext
 
 
 def align_value(value, factor=1024):
@@ -37,3 +40,41 @@ def format_size_human_readable(value, binary=False, precision='%.2f'):
     value = value * base / unit
     format_str = ('%d' if value.is_integer() else precision) + ' %s'
     return format_str % (value, s)
+
+
+def normalize_data_size(value_str, order_magnitude="M", factor=1024):
+    """
+    Normalize a data size in one order of magnitude to another (MB to GB,
+    for example).
+
+    :param value_str: a string include the data default unit is 'B'
+    :param order_magnitude: the magnitude order of result
+    :param factor: the factor between two relative order of magnitude.
+                   Normally could be 1024 or 1000
+    :return normalized data size
+    """
+    def __get_unit_index(M):
+        try:
+            return ['B', 'K', 'M', 'G', 'T'].index(M.upper())
+        except ValueError:
+            pass
+        return 0
+
+    regex = r"(\d+\.?\d*)\s*(\w?)"
+    match = re.search(regex, value_str)
+    try:
+        value = match.group(1)
+        unit = match.group(2)
+        if not unit:
+            unit = 'B'
+    except TypeError:
+        raise ValueError("Invalid data size format 'value_str=%s'" % value_str)
+
+    getcontext().prec = 20
+    from_index = __get_unit_index(unit)
+    to_index = __get_unit_index(order_magnitude)
+    if from_index - to_index >= 0:
+        data_size = int(float(value) * float(factor ** (from_index - to_index)))
+    else:
+        data_size = Decimal(value) / Decimal(factor ** (to_index - from_index))
+    return str(data_size) + order_magnitude
