@@ -69,7 +69,6 @@ def normalize_data_size(value_str, order_magnitude="M", factor=1024):
             unit = 'B'
     except TypeError:
         raise ValueError("Invalid data size format 'value_str=%s'" % value_str)
-
     getcontext().prec = 20
     from_index = __get_unit_index(unit)
     to_index = __get_unit_index(order_magnitude)

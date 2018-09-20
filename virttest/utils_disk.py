@@ -385,7 +385,6 @@ def create_partition_linux(session, did, size, start,
         factor = '1024'
     else:
         factor = '1000'
-    # unit = re.findall(r'\w+$', size)[0]
     size = utils_numeric.normalize_data_size(size, order_magnitude="B", factor=factor)[:-1]
     start = utils_numeric.normalize_data_size(start, order_magnitude="B", factor=factor)[:-1]
     logging.debug('===>size align_before: %s' % size)
