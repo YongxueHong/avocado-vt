@@ -42,7 +42,7 @@ def format_size_human_readable(value, binary=False, precision='%.2f'):
     return format_str % (value, s)
 
 
-def normalize_data_size(value_str, order_magnitude="M", factor="1024"):
+def normalize_data_size(value_str, order_magnitude="M", factor=1024):
     """
     Normalize a data size in one order of magnitude to another (MB to GB,
     for example).
@@ -51,6 +51,7 @@ def normalize_data_size(value_str, order_magnitude="M", factor="1024"):
     :param order_magnitude: the magnitude order of result
     :param factor: the factor between two relative order of magnitude.
                    Normally could be 1024 or 1000
+    :return normalized data size
     """
     def __get_unit_index(M):
         try:
@@ -68,10 +69,11 @@ def normalize_data_size(value_str, order_magnitude="M", factor="1024"):
             unit = 'B'
     except TypeError:
         raise ValueError("Invalid data size format 'value_str=%s'" % value_str)
+    getcontext().prec = 20
     from_index = __get_unit_index(unit)
     to_index = __get_unit_index(order_magnitude)
-    scale = int(factor) ** (to_index - from_index)
-    d_context = getcontext()
-    d_context.prec = 20
-    data_size = Decimal(value) / Decimal(scale)
-    return str(data_size)
+    if from_index - to_index >= 0:
+        data_size = int(float(value) * float(factor ** (from_index - to_index)))
+    else:
+        data_size = Decimal(value) / Decimal(factor ** (to_index - from_index))
+    return str(data_size) + order_magnitude
