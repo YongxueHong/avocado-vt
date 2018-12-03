@@ -783,7 +783,8 @@ class VM(virt_vm.BaseVM):
                 image_params['image_format'] = None
                 devs += devices.images_define_by_params(floppy_name,
                                                         image_params,
-                                                        media='')
+                                                        media='',
+                                                        params=params)
             # q35 machine has the different cmdline for floppy devices,
             # and not like other types of storage, all the drives would
             # attach to the same one floppy device, so have to do some
@@ -1759,7 +1760,8 @@ class VM(virt_vm.BaseVM):
             devs = devices.images_define_by_params(image_name, image_params,
                                                    'disk', index, image_boot,
                                                    image_bootindex,
-                                                   pci_bus=parent_bus)
+                                                   pci_bus=parent_bus,
+                                                   params=params)
             for _ in devs:
                 devices.insert(_)
 
@@ -2048,7 +2050,8 @@ class VM(virt_vm.BaseVM):
                                                        'cdrom', index,
                                                        image_boot,
                                                        image_bootindex,
-                                                       pci_bus=parent_bus)
+                                                       pci_bus=parent_bus,
+                                                       params=params)
                 for _ in devs:
                     devices.insert(_)
 
@@ -4370,7 +4373,12 @@ class VM(virt_vm.BaseVM):
                             matched = False
                             break
                 if matched:
-                    return block['device']
+                    # The 'device' is empty from query block with blockdev.
+                    # So the 'device' is replaced by 'node-name'.
+                    if not block['device']:
+                        return block['inserted']['node-name']
+                    else:
+                        return block['device']
         return None
 
     def process_info_block(self, blocks_info):
@@ -4464,8 +4472,13 @@ class VM(virt_vm.BaseVM):
                         return True
         else:
             for block in blocks_info:
-                if value in str(block):
-                    return block['locked']
+                if self.params['use_blockdev'] == 'yes':
+                    qdev = self.get_device_id(value)
+                    if block['qdev'] == qdev:
+                        return block['locked']
+                else:
+                    if value in str(block):
+                        return block['locked']
         return False
 
     def live_snapshot(self, base_file, snapshot_file,
@@ -4610,6 +4623,31 @@ class VM(virt_vm.BaseVM):
         """
         return self.monitor.query_block_job(device)
 
+    def get_device_id(self, device):
+        """
+        Get the device id.
+        """
+        for dev in self.devices:
+            if isinstance(dev, qdevices.QDevice):
+                try:
+                    if device == dev.params['drive']:
+                        return dev.params['id']
+                except KeyError:
+                    continue
+        return None
+
+    def _check_cdrom_event(self, tray_open_status=True):
+        events = utils_misc.wait_for(lambda: self.monitor.get_events(),
+                                     timeout=20)
+        if not events:
+            events = []
+        for event in events:
+            if event.get('event') == 'DEVICE_TRAY_MOVED':
+                if event['data']['tray-open'] == tray_open_status:
+                    self.monitor.clear_event('DEVICE_TRAY_MOVED')
+                    return True
+        return False
+
     def eject_cdrom(self, device, force=False):
         """
         Eject cdrom and open door of the CDROM;
@@ -4617,16 +4655,32 @@ class VM(virt_vm.BaseVM):
         :param device: device ID;
         :param force: force eject or not;
         """
-        return self.monitor.eject_cdrom(device, force)
+        if self.params['use_blockdev'] == 'yes':
+            id = self.get_device_id(device)
+            self.monitor.blockdev_open_tray(id, force)
+            # warning: need to check the cdrom event.
+            # if not self._check_cdrom_event(True):
+            #     raise exceptions.TestError("Failed to open the tray.")
+            return self.monitor.blockdev_remove_medium(id)
+            # warning: need to check the cdrom event.
+            # self.monitor.blockdev_close_tray(id)
+            # if not self._check_cdrom_event(False):
+            #     raise exceptions.TestError("Failed to close the tray.")
+        else:
+            return self.monitor.eject_cdrom(device, force)
 
-    def change_media(self, device, target):
+    def change_media(self, device, target, format='raw'):
         """
         Change media of cdrom;
 
         :param device: Device ID;
         :param target: new media file;
         """
-        return self.monitor.change_media(device, target)
+        if self.params['use_blockdev'] == 'yes':
+            id = self.get_device_id(device)
+            return self.monitor.blockdev_change_medium(id, target, format)
+        else:
+            return self.monitor.change_media(device, target)
 
     def balloon(self, size):
         """

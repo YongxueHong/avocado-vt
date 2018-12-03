@@ -674,10 +674,27 @@ class DevContainer(object):
         ver_out = device.verify_unplug(out, monitor)
 
         try:
-            device.unplug_hook()
-            drive = device.get_param("drive")
-            if drive:
-                self.remove(drive)
+            # workaround: judge if use use blockdev_add and blockdev_del
+            # by call function has_option.
+            if self.has_option('blockdev'):
+                drive = device.get_param("drive")
+                backing_file = device.get_param("file")
+                if drive:
+                    for dev in self:
+                        # hot uplug the first layer driver node.
+                        if drive == dev.get_param("node-name"):
+                            self.simple_unplug(dev, monitor)
+                elif backing_file:
+                    for dev in self:
+                        # hot uplug the second layer driver node.
+                        if backing_file == dev.get_param("node-name"):
+                            self.simple_unplug(dev, monitor)
+
+            else:
+                device.unplug_hook()
+                drive = device.get_param("drive")
+                if drive:
+                    self.remove(drive)
             self.remove(device, True)
             if ver_out is True:
                 self.set_clean()
@@ -1276,7 +1293,8 @@ class DevContainer(object):
                                    blk_extra_params=None, scsi=None,
                                    drv_extra_params=None,
                                    num_queues=None, bus_extra_params=None,
-                                   force_fmt=None):
+                                   force_fmt=None, image_params=None,
+                                   params=None):
         """
         Creates related devices by variables
         :note: To skip the argument use None, to disable it use False
@@ -1313,6 +1331,8 @@ class DevContainer(object):
         :param scsi_hba: Custom scsi HBA
         :param num_queues: performace option for virtio-scsi-pci
         :param bus_extra_params: options want to add to virtio-scsi-pci bus
+        :param image_params: Disk params (params.object_params(name))
+        :param params: A dict containing VM params
         """
         def define_hbas(qtype, atype, bus, unit, port, qbus, pci_bus,
                         addr_spec=None, num_queues=None,
@@ -1495,49 +1515,196 @@ class DevContainer(object):
         #
         # Drive
         # -drive fmt or -drive fmt=none -device ...
+        # or
+        # Blockdev
+        # -blockdev node-name -device ...
         #
-        if self.has_hmp_cmd('__com.redhat_drive_add') and use_device:
-            devices.append(qdevices.QRHDrive(name))
-        elif self.has_hmp_cmd('drive_add') and use_device:
-            devices.append(qdevices.QHPDrive(name))
-        elif self.has_option("device"):
-            devices.append(qdevices.QDrive(name, use_device))
-        else:       # very old qemu without 'addr' support
-            devices.append(qdevices.QOldDrive(name, use_device))
-        devices[-1].set_param('if', 'none')
-        devices[-1].set_param('rerror', rerror)
-        devices[-1].set_param('werror', werror)
-        devices[-1].set_param('serial', serial)
-        devices[-1].set_param('boot', boot, bool)
-        devices[-1].set_param('snapshot', snapshot, bool)
-        devices[-1].set_param('readonly', readonly, bool)
-        if 'aio' in self.get_help_text():
-            if aio == 'native' and snapshot == 'yes':
-                logging.warn('snapshot is on, fallback aio to threads.')
-                aio = 'threads'
-            devices[-1].set_param('aio', aio)
-            if aio == 'native':
-                # Since qemu 2.6, aio=native has no effect without
-                # cache.direct=on or cache=none, It will be error out.
-                # Please refer to qemu commit d657c0c.
-                cache = cache not in ['none', 'directsync'] and 'none' or cache
-        # Forbid to specify the cache mode for empty drives.
-        # More info from qemu commit 91a097e74.
-        if not filename:
-            cache = None
-        devices[-1].set_param('cache', cache)
-        devices[-1].set_param('media', media)
-        devices[-1].set_param('format', imgfmt)
-        if blkdebug is not None:
-            devices[-1].set_param('file', 'blkdebug:%s:%s' % (blkdebug,
-                                                              filename))
+        use_blockdev = False
+        if params:
+            if params.get('use_blockdev', 'no') == 'yes':
+                use_blockdev = True
+
+        # Create qemu commands with --drive
+        if not use_blockdev:
+            if self.has_hmp_cmd('__com.redhat_drive_add') and use_device:
+                devices.append(qdevices.QRHDrive(name))
+            elif self.has_hmp_cmd('drive_add') and use_device:
+                devices.append(qdevices.QHPDrive(name))
+            elif self.has_option("device"):
+                devices.append(qdevices.QDrive(name, use_device))
+            else:       # very old qemu without 'addr' support
+                devices.append(qdevices.QOldDrive(name, use_device))
+            devices[-1].set_param('if', 'none')
+            devices[-1].set_param('rerror', rerror)
+            devices[-1].set_param('werror', werror)
+            devices[-1].set_param('serial', serial)
+            devices[-1].set_param('boot', boot, bool)
+            devices[-1].set_param('snapshot', snapshot, bool)
+            devices[-1].set_param('readonly', readonly, bool)
+            if 'aio' in self.get_help_text():
+                if aio == 'native' and snapshot == 'yes':
+                    logging.warn('snapshot is on, fallback aio to threads.')
+                    aio = 'threads'
+                devices[-1].set_param('aio', aio)
+                if aio == 'native':
+                    # Since qemu 2.6, aio=native has no effect without
+                    # cache.direct=on or cache=none, It will be error out.
+                    # Please refer to qemu commit d657c0c.
+                    cache = cache not in ['none', 'directsync'] and 'none' or cache
+            # Forbid to specify the cache mode for empty drives.
+            # More info from qemu commit 91a097e74.
+            if not filename:
+                cache = None
+            devices[-1].set_param('cache', cache)
+            devices[-1].set_param('media', media)
+            devices[-1].set_param('format', imgfmt)
+            if blkdebug is not None:
+                devices[-1].set_param('file', 'blkdebug:%s:%s' % (blkdebug,
+                                                                  filename))
+            else:
+                devices[-1].set_param('file', filename)
+            if drv_extra_params:
+                drv_extra_params = (_.split('=', 1) for _ in
+                                    drv_extra_params.split(',') if _)
+                for key, value in drv_extra_params:
+                    devices[-1].set_param(key, value)
+
+        # Create qemu commands with --blockdev
         else:
-            devices[-1].set_param('file', filename)
-        if drv_extra_params:
-            drv_extra_params = (_.split('=', 1) for _ in
-                                drv_extra_params.split(',') if _)
-            for key, value in drv_extra_params:
-                devices[-1].set_param(key, value)
+            cache_dict = {}
+            cache_dict['writeback'] = {'write-cache': 'on',
+                                       'cache.direct': 'off',
+                                       'cache.no-flush': 'off'}
+            cache_dict['none'] = {'write-cache': 'on',
+                                  'cache.direct': 'on',
+                                  'cache.no-flush': 'off'}
+            cache_dict['writethrough'] = {'write-cache': 'off',
+                                          'cache.direct': 'off',
+                                          'cache.no-flush': 'off'}
+            cache_dict['directsync'] = {'write-cache': 'off',
+                                        'cache.direct': 'on',
+                                        'cache.no-flush': 'off'}
+            cache_dict['unsafe'] = {'write-cache': 'on',
+                                    'cache.direct': 'off',
+                                    'cache.no-flush': 'on'}
+
+            blkdev_format_drivers = ['bochs', 'cloop', 'copy-on-read', 'dmg',
+                                     'luks', 'parallels', 'qcow2', 'qcow',
+                                     'qed', 'raw', 'replication', 'vdi',
+                                     'vhdx', 'vmdk', 'vpc']
+
+            blkdev_protocol_drivers = ['file', 'ftp', 'ftps', 'gluster',
+                                       'host_cdrom', 'host_device', 'http',
+                                       'https', 'iscsi', 'nbd', 'nfs',
+                                       'null-aio', 'null-co', 'sheepdog',
+                                       'ssh']
+
+            blkdev_filter_drives = ['blkdebug', 'blkverify', 'quorum',
+                                    'throttle']
+
+            blkdev_common_options = ['read_only', 'cache_direct',
+                                    'cache_no_flush', 'discard',
+                                    'force_share', 'detect_zeroes']
+
+            blkdev_drivers = (blkdev_format_drivers + blkdev_protocol_drivers
+                              + blkdev_filter_drives)
+
+            image_params['blkdev_common_options'] = blkdev_common_options
+            image_params['blkdev_format_drivers'] = blkdev_format_drivers
+            image_params['blkdev_protocol_drivers'] = blkdev_protocol_drivers
+            image_params['blkdev_filter_drives'] = blkdev_filter_drives
+            image_params['blkdev_drivers'] = blkdev_drivers
+
+            protocol_node = image_params.get('blkdev_protocol_node', 'file')
+            filter_node = image_params.get('blkdev_filter_node', None)
+
+            image_params['blkdev_read_only'] = readonly
+            if media == 'cdrom':
+                # Force to set option "read-only" to 'on' with '-blockdev'
+                # to avoid hitting "Read-only file system" error.
+                # Set common option "read_only" to default.
+                if not image_params.get('blkdev_%s_read_only' % protocol_node,
+                                        None):
+                    image_params['blkdev_read_only'] = 'on'
+                if not image_params.get('blkdev_read_only', None):
+                    image_params['blkdev_read_only'] = 'on'
+                format_node = 'raw'
+            elif media == 'disk' or media == '' or media is None:
+                format_node = image_params.get('image_format')
+
+            if 'aio' in self.get_help_text():
+                # Set blockdev protocol drives option "aio" to default.
+                if not aio:
+                    image_params['blkdev_%s_aio' % protocol_node] = 'threads'
+                else:
+                    if not image_params.get('blkdev_%s_aio' % protocol_node,
+                                            None):
+                        image_params['blkdev_%s_aio' % protocol_node] = aio
+
+            if aio == 'native':
+                cache = cache not in ['none', 'directsync'] and 'none' or cache
+
+            # For blockdev, filename must be set in file drive node.
+            # So replace it with null-co drive node.
+            if not filename:
+                cache = None
+                protocol_node = 'null-co'
+
+            cache_direct = image_params.get('blkdev_cache_direct', None)
+            cache_no_flush = image_params.get('blkdev_cache_no_flush', None)
+            for key, val in cache_dict.items():
+                if cache == key and not cache_direct and not cache_no_flush:
+                    image_params['blkdev_cache_direct'] = val['cache.direct']
+                    image_params['blkdev_cache_no_flush'] = val['cache.no-flush']
+                    image_params['write_cache'] = val['write-cache']
+
+            # set protocol node to "host_device" if drive_format is
+            # 'scsi-generic' or 'scsi-block'
+            if 'scsi-generic' in fmt or 'scsi-block' in fmt:
+                protocol_node = 'host_device'
+                # scsi-block and scsi-generic don't support
+                # property 'write-cache'
+                image_params['write_cache'] = None
+
+            if drv_extra_params:
+                # Convert the value of option "discard"
+                # from "-drive" to "-blockdev".
+                drv_extra_params = re.sub(r'\s*discard\s*=\s*on\s*',
+                                          'discard=unmap', drv_extra_params)
+                drv_extra_params = re.sub(r'\s*discard\s*=\s*off\s*',
+                                          'discard=ignore', drv_extra_params)
+                drv_extra_options = [_.split('=', 1)[0] for _ in
+                                     drv_extra_params.split(',') if _]
+                for extra_option in drv_extra_options:
+                    if extra_option in blkdev_common_options:
+                        image_params["blkdev_extra_params"] = drv_extra_params
+
+            if self.has_qmp_cmd('blockdev-add') and use_device and use_blockdev:
+                # Set protocol node.
+                devices.append(qdevices.QHPBlockdev(name, protocol_node))
+                protocol = devices[-1].set_driver_protocol_options(image_params)
+                # Set format node.
+                devices.append(qdevices.QHPBlockdev(name, format_node))
+                devices[-1].set_driver_format_options(image_params, protocol)
+                # Set filter node.
+                if filter_node:
+                    devices.append(qdevices.QHPBlockdev(name, filter_node))
+                    devices[-1].set_driver_filter_options(image_params)
+            elif self.has_option('blockdev') and use_blockdev:
+                # Set protocol node.
+                devices.append(qdevices.QBlockdev(name, protocol_node),
+                               use_device)
+                protocol = devices[-1].set_driver_protocol_options(image_params)
+                # Set format node.
+                devices.append(qdevices.QBlockdev(name, format_node,
+                                                  use_device))
+                devices[-1].set_driver_format_options(image_params, protocol)
+                # Set filter node.
+                if filter_node:
+                    devices.append(qdevices.QBlockdev(name, filter_node),
+                                   use_device)
+                    devices[-1].set_driver_filter_options(image_params)
+
         if not use_device:
             if fmt and fmt.startswith('scsi-'):
                 if scsi_hba == 'lsi53c895a' or scsi_hba == 'spapr-vscsi':
@@ -1619,6 +1786,17 @@ class DevContainer(object):
         devices[-1].set_param('min_io_size', min_io_size)
         devices[-1].set_param('opt_io_size', opt_io_size)
         devices[-1].set_param('bootindex', bootindex)
+
+        if params:
+            if params.get('use_blockdev', 'no') == 'yes':
+                # Set write-cache if use blockdev.
+                devices[-1].set_param('write-cache',
+                                      image_params.get('write_cache', None))
+                # Set rerror and werror for device options instead of drive
+                # if uss blockdev.
+                devices[-1].set_param('rerror', rerror)
+                devices[-1].set_param('werror', werror)
+
         if x_data_plane in ["yes", "no", "on", "off"]:
             devices[-1].set_param('x-data-plane', x_data_plane, bool)
         else:
@@ -1637,7 +1815,7 @@ class DevContainer(object):
     def images_define_by_params(self, name, image_params, media=None,
                                 index=None, image_boot=None,
                                 image_bootindex=None,
-                                pci_bus={"aobject": "pci.0"}):
+                                pci_bus={"aobject": "pci.0"}, params=None):
         """
         Wrapper for creating disks and related hbas from autotest image params.
 
@@ -1718,12 +1896,14 @@ class DevContainer(object):
                                                image_params.get("num_queues"),
                                                image_params.get(
                                                    "bus_extra_params"),
-                                               image_params.get("force_drive_format"))
+                                               image_params.get("force_drive_format"),
+                                               image_params,
+                                               params)
 
     def cdroms_define_by_params(self, name, image_params, media=None,
                                 index=None, image_boot=None,
                                 image_bootindex=None,
-                                pci_bus={"aobject": "pci.0"}):
+                                pci_bus={"aobject": "pci.0"}, params=None):
         """
         Wrapper for creating cdrom and related hbas from autotest image params.
 
@@ -1826,7 +2006,9 @@ class DevContainer(object):
                                                None,
                                                image_params.get(
                                                    "bus_extra_params"),
-                                               image_params.get("force_drive_format"))
+                                               image_params.get("force_drive_format"),
+                                               image_params,
+                                               params)
 
     def pcic_by_params(self, name, params):
         """

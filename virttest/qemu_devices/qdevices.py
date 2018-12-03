@@ -13,6 +13,7 @@ from collections import OrderedDict
 
 from virttest import qemu_monitor
 from virttest import utils_misc
+from virttest import arch, storage, data_dir, virt_vm
 from virttest.qemu_devices.utils import DeviceError
 from virttest.qemu_devices.utils import none_or_int
 
@@ -465,6 +466,298 @@ class QDrive(QCustomDevice):
         super(QDrive, self).set_param(option, value, option_type)
 
 
+class QBlockdev(QCustomDevice):
+
+    """
+    Representation of the '-blockdev' qemu object without hotplug support.
+    """
+
+    def __init__(self, aobject, node_type=None, use_device=True):
+        child_bus = QBlockdevBus('drive_%s' % aobject, aobject)
+        super(QBlockdev, self).__init__("blockdev", {}, aobject, (),
+                                     child_bus)
+        self.__aobject = aobject
+        self.__node_type = node_type
+
+        if use_device:
+            if (self.__node_type == 'qcow2' or self.__node_type == 'raw'
+                    or self.__node_type == 'luks'):
+                self.params['node-name'] = 'drive_%s' % aobject
+            else:
+                self.params['node-name'] = '%s_%s' % (self.__node_type,
+                                                      aobject)
+
+    def _set_blkdev_extra_parmas(self, image_params):
+        if self.__node_type in image_params['blkdev_format_drivers']:
+            blkdev_extra_params = image_params.get(
+                "blkdev_format_extra_params", None)
+        else:
+            blkdev_extra_params = image_params.get("blkdev_%s_extra_params"
+                                               % self.__node_type, None)
+        if not blkdev_extra_params:
+            blkdev_extra_params = image_params.get("blkdev_extra_params",
+                                                   None)
+
+        if blkdev_extra_params:
+            blkdev_extra_params = [_.split('=', 1) for _ in
+                                   blkdev_extra_params.split(',') if _]
+            for option, value in blkdev_extra_params:
+                if value in ['on', 'yes', 'off', 'no', True, False]:
+                    self.set_param(option, value, bool)
+                else:
+                    self.set_param(option, value)
+
+    def set_param(self, option, value, option_type=None):
+        """
+        Set device param using qemu notation ("on", "off" instead of bool...)
+        It restricts setting of the 'node-name' param as it's automatically created.
+        :param option: which option's value to set
+        :param value: new value
+        :param option_type: type of the option (bool)
+        """
+        if option == 'node-name':
+            raise KeyError(
+                "Blockdev node-name is automatically created from aobject. %s"
+                % self)
+        super(QBlockdev, self).set_param(option, value, option_type)
+
+    def set_blkdev_options(self, image_params):
+        self.set_param('driver', self.__node_type)
+
+        if self.__node_type in image_params['blkdev_format_drivers']:
+            read_only = 'blkdev_format_read_only'
+            cache_direct = 'blkdev_format_cache_direct'
+            cache_no_flush = 'blkdev_format_cache_no_flush'
+            discard = 'blkdev_format_discard'
+            force_share = 'blkdev_format_force_share'
+            detect_zeroes = 'blkdev_format_detect_zeroes'
+        else:
+            read_only = 'blkdev_%s_read_only' % self.__node_type
+            cache_direct = 'blkdev_%s_cache_direct' % self.__node_type
+            cache_no_flush = 'blkdev_%s_cache_no_flush' % self.__node_type
+            discard = 'blkdev_%s_discard' % self.__node_type
+            force_share = 'blkdev_%s_force_share' % self.__node_type
+            detect_zeroes = 'blkdev_%s_detect_zeroes' % self.__node_type
+
+        if not image_params.get(read_only, None):
+            read_only = 'blkdev_read_only'
+        if not image_params.get(cache_direct, None):
+            cache_direct = 'blkdev_cache_direct'
+        if not image_params.get(cache_no_flush, None):
+            cache_no_flush = 'blkdev_cache_no_flush'
+        if not image_params.get(discard, None):
+            discard = 'blkdev_discard'
+        if not image_params.get(force_share, None):
+            force_share = 'blkdev_force_share'
+        if not image_params.get(detect_zeroes, None):
+            detect_zeroes = 'blkdev_detect_zeroes'
+
+        self.set_param('read-only',
+                       image_params.get(read_only, None), bool)
+        self.set_param('cache.direct',
+                       image_params.get(cache_direct, None), bool)
+        self.set_param('cache.no-flush',
+                       image_params.get(cache_no_flush, None), bool)
+        self.set_param('discard',
+                       image_params.get(discard, None))
+        self.set_param('force-share',
+                       image_params.get(force_share, None), bool)
+        self.set_param('detect-zeroes',
+                       image_params.get(detect_zeroes, None))
+
+        self._set_blkdev_extra_parmas(image_params)
+
+    def set_blkdev_options_file(self, image_params):
+        filename = storage.get_image_filename(image_params,
+                                              data_dir.get_data_dir())
+        image_params['blkdev_%s_filename' % self.__node_type] = filename
+        self.set_blkdev_options(image_params)
+        self.set_param('filename',
+                       image_params.get(
+                           'blkdev_%s_filename' % self.__node_type))
+        self.set_param('pr-manager',
+                       image_params.get(
+                           'blkdev_%s_pr_manager' % self.__node_type, None))
+        self.set_param('locking',
+                       image_params.get(
+                           'blkdev_%s_locking' % self.__node_type, None))
+        self.set_param('aio',
+                       image_params.get(
+                           'blkdev_%s_aio' % self.__node_type, None))
+        return self.params['node-name']
+
+    def set_blkdev_options_iscsi(self, image_params):
+        self.set_blkdev_options(image_params)
+        self.set_param('transport',
+                       image_params.get(
+                           'blkdev_%s_transport' % self.__node_type))
+        self.set_param('portal',
+                       image_params.get(
+                           'blkdev_%s_portal' % self.__node_type))
+        self.set_param('target',
+                       image_params.get(
+                           'blkdev_%s_target' % self.__node_type))
+        self.set_param('lun',
+                       image_params.get(
+                           'blkdev_%s_lun' % self.__node_type, None))
+        self.set_param('user',
+                       image_params.get(
+                           'blkdev_%s_user' % self.__node_type, None))
+        self.set_param('password-secret',
+                       image_params.get(
+                           'blkdev_%s_password_secret' % self.__node_type,
+                           None))
+        self.set_param('initiator-name',
+                       image_params.get(
+                           'blkdev_%s_initiator_name' % self.__node_type,
+                           None))
+        self.set_param('header-digest',
+                       image_params.get(
+                           'blkdev_%s_header_digest' % self.__node_type,
+                           None))
+        self.set_param('timeout',
+                       image_params.get(
+                           'blkdev_%s_timeout' % self.__node_type,
+                           None))
+        return self.params['node-name']
+
+    def set_blkdev_options_nbd(self, image_params):
+        self.set_blkdev_options(image_params)
+        self.set_param('server',
+                       image_params.get(
+                           'blkdev_%s_server' % self.__node_type))
+        self.set_param('export',
+                       image_params.get(
+                           'blkdev_%s_export' % self.__node_type, None))
+        self.set_param('tls-creds',
+                       image_params.get(
+                           'blkdev_%s_tls_creds' % self.__node_type, None))
+        self.set_param('x-dirty-bitmap',
+                       image_params.get(
+                           'blkdev_%s_x_dirty_bitmap' % self.__node_type,
+                           None))
+        return self.params['node-name']
+
+    def set_blkdev_options_nfs(self, image_params):
+        self.set_blkdev_options(image_params)
+        self.set_param('server',
+                       image_params.get(
+                           'blkdev_%s_server' % self.__node_type))
+        self.set_param('path',
+                       image_params.get(
+                           'blkdev_%s_path' % self.__node_type))
+        self.set_param('user',
+                       image_params.get(
+                           'blkdev_%s_user' % self.__node_type, None))
+        self.set_param('group',
+                       image_params.get(
+                           'blkdev_%s_group' % self.__node_type, None))
+        self.set_param('tcp-syn-count',
+                       image_params.get(
+                           'blkdev_%s_tcp_syn_count' % self.__node_type, None))
+        self.set_param('readahead-size',
+                       image_params.get(
+                           'blkdev_%s_readahead_size' % self.__node_type,
+                           None))
+        self.set_param('page-cache-size',
+                       image_params.get(
+                           'blkdev_%s_page_cache_size' % self.__node_type,
+                           None))
+        self.set_param('debug',
+                       image_params.get(
+                           'blkdev_%s_debug' % self.__node_type, None))
+        return self.params['node-name']
+
+    def set_blkdev_options_null(self, image_params):
+        self.set_blkdev_options(image_params)
+        self.set_param('size',
+                       image_params.get(
+                           'blkdev_%s_size' % self.__node_type, None))
+        self.set_param('latency-ns',
+                       image_params.get(
+                           'blkdev_%s_latency_ns' % self.__node_type, None))
+        return self.params['node-name']
+
+    def set_blkdev_options_generic_format(self, image_params, protocol):
+        self.set_blkdev_options(image_params)
+        self.set_param('file', image_params.get('blkdev_file', protocol))
+
+    def set_blkdev_options_generic_cow_format(self, image_params, protocol):
+        self.set_blkdev_options_generic_format(image_params, protocol)
+        self.set_param('backing', image_params.get('blkdev_backing', None))
+
+    def set_blkdev_options_raw(self, image_params, protocol):
+        self.set_blkdev_options_generic_format(image_params, protocol)
+        self.set_param('offset',
+                       image_params.get('blkdev_offset', None))
+        self.set_param('size',
+                       image_params.get('blkdev_size', None))
+
+    def set_blkdev_options_qcow2(self, image_params, protocol):
+        self.set_blkdev_options_generic_cow_format(image_params, protocol)
+        self.set_param('lazy-refcounts',
+                       image_params.get('blkdev_lazy_refcounts', None), bool)
+        self.set_param('pass-discard-request',
+                       image_params.get('blkdev_pass_discard_request', None), bool)
+        self.set_param('pass-discard-snapshot',
+                       image_params.get('blkdev_pass_discard_snapshot', None), bool)
+        self.set_param('pass-discard-other',
+                       image_params.get('blkdev_pass_discard_other', None), bool)
+        self.set_param('cache-size',
+                       image_params.get('blkdev_cache_size', None))
+        self.set_param('l2-cache-size',
+                       image_params.get('blkdev_l2_cache_size', None))
+        self.set_param('l2-cache-entry-size',
+                       image_params.get('blkdev_l2_cache_entry_size', None))
+        self.set_param('refcount-cache-size',
+                       image_params.get('blkdev_refcount_cache_size', None))
+        self.set_param('cache-clean-interval',
+                       image_params.get('blkdev_cache_clean_interval', None))
+
+    def set_blkdev_options_luks(self, image_params, protocol):
+        self.set_blkdev_options_generic_format(image_params, protocol)
+        self.set_param('lkey-secret',
+                       image_params.get('blkdev_key_secret', None))
+
+    def set_blkdev_options_throttle(self, image_params):
+        pass
+
+    def set_blkdev_options_quorum(self, image_params):
+        pass
+
+    def set_driver_protocol_options(self, image_params):
+        file_drives = ['file', 'host_cdrom', 'host_device']
+        null_drives = ['null-co', 'null-aio']
+        if self.__node_type in file_drives:
+            return self.set_blkdev_options_file(image_params)
+        elif self.__node_type == 'iscsi':
+            return self.set_blkdev_options_iscsi(image_params)
+        elif self.__node_type == 'nbd':
+            return self.set_blkdev_options_nbd(image_params)
+        elif self.__node_type == 'nfs':
+            return self.set_blkdev_options_nfs(image_params)
+        elif self.__node_type in null_drives:
+            return self.set_blkdev_options_null(image_params)
+
+    def set_driver_format_options(self, image_params, protocol):
+        if self.__node_type == 'raw':
+            self.set_blkdev_options_raw(image_params, protocol)
+        elif self.__node_type == 'qcow2':
+            self.set_blkdev_options_qcow2(image_params, protocol)
+        elif self.__node_type == 'luks':
+            self.set_blkdev_options_luks(image_params, protocol)
+
+    def set_driver_filter_options(self, image_params):
+        if self.__node_type == 'throttle':
+            self.set_blkdev_options_throttle(image_params)
+        elif self.__node_type == 'quorum':
+            self.set_blkdev_options_quorum(image_params)
+
+    def get_qid(self):
+        """ :return: qemu_id """
+        return self.params.get('node-name', '')
+
+
 class QOldDrive(QDrive):
 
     """
@@ -556,6 +849,79 @@ class QHPDrive(QDrive):
             raise DeviceError("qid not set; device %s can't be unplugged"
                               % self)
         return "drive_del %s" % self.get_qid()
+
+
+class QHPBlockdev(QBlockdev):
+
+    """
+    Representation of the '-blockdev' qemu object with hotplug support.
+    """
+
+    def __init__(self, aobject, node_type=None):
+        super(QHPBlockdev, self).__init__(aobject, node_type)
+        self.__hook_blkdev_bus = None
+        # Options which don't convert string type of 'on' and 'off' to boolean
+        # for qmp command.
+        self.__except_options = ['locking']
+
+    def _handle_args(self, args):
+        """
+        Convert string type of 'on' and 'off' to boolean, and create new dict
+        (e.g: 'cache': {'direct': 'true'}) from key which include symbol '.'
+        (e.g: 'cache.direct': 'true') for adhering to qmp syntax.
+        :param args: dict, Dictionary with the qmp parameters
+        :return:dict, handled args.
+        """
+        # fix issue: 'RuntimeError: OrderedDict mutated during iteration'
+        new_args = args.copy()
+        for key, val in six.iteritems(args):
+            if '.' in key:
+                new_args[key.split('.')[0]] = {}
+        for key, val in six.iteritems(args):
+            if '.' in key:
+                new_args.pop(key)
+                if val == 'on' and key not in self.__except_options:
+                    new_args[key.split('.')[0]][key.split('.')[-1]] = 'true'
+                elif val == 'off' and key not in self.__except_options:
+                    new_args[key.split('.')[0]][key.split('.')[-1]] = 'false'
+                else:
+                    new_args[key.split('.')[0]][key.split('.')[-1]] = val
+            else:
+                if val == 'on' and key not in self.__except_options:
+                    new_args[key] = 'true'
+                elif val == 'off' and key not in self.__except_options:
+                    new_args[key] = 'false'
+        return new_args
+
+    def hotplug_qmp(self):
+        """ :return: the hotplug monitor command """
+        return "blockdev-add", self._handle_args(self.params)
+
+    def unplug_qmp(self):
+        """ :return: the unplug monitor command """
+        if self.get_qid() is None:
+            raise DeviceError("qid not set; device %s can't be unplugged"
+                              % self)
+        return "blockdev-del", {'node-name': self.get_qid()}
+
+    def verify_hotplug(self, out, monitor):
+        # TODO
+        return True
+
+    def verify_unplug(self, out, monitor):
+        # TODO
+        return True
+
+    def get_children(self):
+        """ blockdev bus should be removed too """
+        for bus in self.child_bus:
+            if isinstance(bus, QBlockdevBus):
+                blkdev_bus = bus
+                self.rm_child_bus(bus)
+                break
+        devices = super(QHPBlockdev, self).get_children()
+        self.add_child_bus(blkdev_bus)
+        return devices
 
 
 class QRHDrive(QDrive):
@@ -1705,6 +2071,42 @@ class QDriveBus(QSparseBus):
     def _update_device_props(self, device, addr):
         """
         Always set -drive property, it's mandatory. Also for hotplug purposes
+        store this bus device into hook variable of the device.
+        """
+        self._set_device_props(device, addr)
+        if hasattr(device, 'hook_drive_bus'):
+            device.hook_drive_bus = self.get_device()
+
+
+class QBlockdevBus(QSparseBus):
+
+    """
+    QBlockdev bus representation
+    """
+
+    def __init__(self, busid, aobject=None):
+        """
+        :param busid: id of the bus (pci.0)
+        :param aobject: Related autotest object (image1)
+        """
+        super(QBlockdevBus, self).__init__('drive', [[], []], busid, 'QBlockdev',
+                                        aobject)
+
+    def get_free_slot(self, addr_pattern):
+        """ Use only drive as slot """
+        if 'drive' in self.bus:
+            return None
+        else:
+            return True
+
+    @staticmethod
+    def _addr2stor(addr):
+        """ address is always drive """
+        return 'drive'
+
+    def _update_device_props(self, device, addr):
+        """
+        Always set -blockdev property, it's mandatory. Also for hotplug purposes
         store this bus device into hook variable of the device.
         """
         self._set_device_props(device, addr)
