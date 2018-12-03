@@ -783,7 +783,8 @@ class VM(virt_vm.BaseVM):
                 image_params['image_format'] = None
                 devs += devices.images_define_by_params(floppy_name,
                                                         image_params,
-                                                        media='')
+                                                        media='',
+                                                        params=params)
             # q35 machine has the different cmdline for floppy devices,
             # and not like other types of storage, all the drives would
             # attach to the same one floppy device, so have to do some
@@ -1759,7 +1760,8 @@ class VM(virt_vm.BaseVM):
             devs = devices.images_define_by_params(image_name, image_params,
                                                    'disk', index, image_boot,
                                                    image_bootindex,
-                                                   pci_bus=parent_bus)
+                                                   pci_bus=parent_bus,
+                                                   params=params)
             for _ in devs:
                 devices.insert(_)
 
@@ -4370,7 +4372,12 @@ class VM(virt_vm.BaseVM):
                             matched = False
                             break
                 if matched:
-                    return block['device']
+                    # The 'device' is empty from query block with blockdev.
+                    # So the 'device' is replaced by 'node-name'.
+                    if not block['device']:
+                        return block['inserted']['node-name']
+                    else:
+                        return block['device']
         return None
 
     def process_info_block(self, blocks_info):
