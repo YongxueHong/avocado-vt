@@ -2069,6 +2069,7 @@ class DevContainer(object):
         image_copy_on_read=None,
         image_iothread_vq_mapping=None,
         slices_info=None,
+        image_params=None,
     ):
         """
         Creates related devices by variables
@@ -2514,6 +2515,8 @@ class DevContainer(object):
             dev_parent = {"type": "virtio-bus"}
         elif fmt == "virtio-blk-ccw":  # For IBM s390 platform
             dev_parent = {"type": "virtual-css"}
+        elif fmt == "virtio-blk-vhost-user":
+            dev_parent = pci_bus  # vhost-user-blk-pci attaches to PCI bus
         else:
             dev_parent = {"type": fmt}
 
@@ -2874,6 +2877,21 @@ class DevContainer(object):
                 else:
                     if iothread and iothread not in self:
                         devices.insert(-2, iothread)
+        elif fmt == "virtio-blk-vhost-user":
+            devices[-1].set_param("driver", "vhost-user-blk-pci")
+            # Ensure chardev is defined in the test configuration
+            devices[-1].set_param("chardev", image_params.get("chardev"))
+            if bus is not None:
+                devices[-1].set_param("addr", hex(bus))
+                bus = None
+            if iothread:
+                try:
+                    iothread = self.allocate_iothread(iothread, devices[-1])
+                except TypeError:
+                    pass
+                else:
+                    if iothread and iothread not in self:
+                        devices.insert(-2, iothread)
         elif fmt in ("usb1", "usb2", "usb3"):
             devices[-1].set_param("driver", "usb-storage")
             devices[-1].set_param("port", unit)
@@ -3104,6 +3122,7 @@ class DevContainer(object):
             image_params.get("image_copy_on_read"),
             image_params.get("image_iothread_vq_mapping"),
             slices_info,
+            image_params=image_params,
         )
 
     def serials_define_by_variables(

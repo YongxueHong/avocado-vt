@@ -71,6 +71,53 @@ kvm_userspace_ver_cmd = /bin/true
 verify_host_dmesg = no
 """
 
+TEST_VIRTIO_BLK_VHOST_USER_PY = """
+from avocado_vt.test import Test
+from avocado_vt.utils import utils_misc
+
+class VirtioBlkVhostUser(Test):
+    def test(self):
+        # Create a socket for vhost-user
+        sock_path = utils_misc.get_tmp_path("vhost-user.sock")
+        self.vm.params["chardev_vhost_user_sock_path"] = sock_path
+
+        # Check if VM boots successfully
+        self.vm.verify_alive()
+"""
+
+TEST_VIRTIO_BLK_VHOST_USER_CFG = """
+common:
+    # Basic VM configuration
+    vm_type = qemu
+    main_vm = avocado-vt-vm1
+    vms = avocado-vt-vm1
+    mem = 1024
+    smp = 1
+    images = image1
+    image_name = Fedora-Cloud-Base-30-1.2.x86_64.qcow2
+    image_format = qcow2
+    image_size = 10G
+    display = none
+    nics = nic1
+    nic_model = virtio
+    nettype = user
+
+    # virtio-blk-vhost-user configuration
+    drive_format_image1 = virtio-blk-vhost-user
+    chardevs = vhost_user_char
+    chardev_backend_vhost_user_char = socket
+    chardev_path_vhost_user_char = %(chardev_vhost_user_sock_path)s
+
+variants:
+    - virtio_blk_vhost_user:
+        type = virtio_blk_vhost_user
+
+only virtio_blk_vhost_user
+kvm_ver_cmd = /bin/true
+kvm_userspace_ver_cmd = /bin/true
+verify_host_dmesg = no
+"""
+
 
 class BasicTests(unittest.TestCase):
     def setUp(self):
@@ -141,6 +188,37 @@ class BasicTests(unittest.TestCase):
             except IOError:
                 pass
         shutil.rmtree(self.tmpdir)
+
+    def test_virtio_blk_vhost_user(self):
+        os.chdir(BASE_DIR)
+        test_py_path = os.path.join(
+            data_dir.get_test_providers_dir(),
+            "downloads",
+            "io-github-autotest-qemu",
+            "generic",
+            "tests",
+            "virtio_blk_vhost_user.py",
+        )
+        self.assertTrue(
+            os.path.exists(os.path.dirname(test_py_path)),
+            "The qemu providers dir does not exist, Avocado-vt "
+            "is probably not configured properly.",
+        )
+        self.rm_files.append(test_py_path)
+        script.make_script(test_py_path, TEST_VIRTIO_BLK_VHOST_USER_PY)
+        cfg_path = script.make_script(
+            os.path.join(self.tmpdir, "virtio_blk_vhost_user.cfg"),
+            TEST_VIRTIO_BLK_VHOST_USER_CFG,
+        )
+        result = process.run(
+            "avocado --show all run --vt-config %s "
+            "--job-results-dir %s" % (cfg_path, self.tmpdir),
+            ignore_status=True,
+        )
+        self.assertEqual(result.exit_status, 0, "Exit status is not 0:\n%s" % result)
+        status = json.load(open(os.path.join(self.tmpdir, "latest", "results.json")))
+        self.assertEqual(status["tests"][0]["status"], "PASS",
+                         "Test did not pass:\n%s" % result)
 
 
 if __name__ == "__main__":
