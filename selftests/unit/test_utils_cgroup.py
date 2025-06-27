@@ -157,7 +157,7 @@ class CgroupTest(unittest.TestCase):
                 self.assertRaises(
                     exceptions.TestError,
                     utils_cgroup.get_cgroup_mountpoint,
-                    "non_exit_ctlr",
+                    "non_existent_ctlr", # Corrected typo from non_exit_ctlr to non_existent_ctlr for clarity
                     mount_file_path,
                 )
             finally:

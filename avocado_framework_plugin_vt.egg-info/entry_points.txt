@@ -1,0 +1,29 @@
+[avocado.plugins.cli]
+vt = avocado_vt.plugins.vt:VTRun
+vt-list = avocado_vt.plugins.vt_list:VTLister
+
+[avocado.plugins.cli.cmd]
+vt-bootstrap = avocado_vt.plugins.vt_bootstrap:VTBootstrap
+vt-list-archs = avocado_vt.plugins.vt_list_archs:VTListArchs
+vt-list-guests = avocado_vt.plugins.vt_list_guests:VTListGuests
+
+[avocado.plugins.discoverer]
+avocado-vt = avocado_vt.plugins.vt_resolver:VTDiscoverer
+
+[avocado.plugins.init]
+vt-init = avocado_vt.plugins.vt_init:VtInit
+
+[avocado.plugins.resolver]
+avocado-vt = avocado_vt.plugins.vt_resolver:VTResolver
+
+[avocado.plugins.result_events]
+vt-joblock = avocado_vt.plugins.vt_joblock:VTJobLock
+
+[avocado.plugins.runnable.runner]
+avocado-vt = avocado_vt.plugins.vt_runner:VTTestRunner
+
+[avocado.plugins.settings]
+vt-settings = avocado_vt.plugins.vt_settings:VTSettings
+
+[console_scripts]
+avocado-runner-avocado-vt = avocado_vt.plugins.vt_runner:main

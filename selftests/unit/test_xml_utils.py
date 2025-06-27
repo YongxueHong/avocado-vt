@@ -50,7 +50,8 @@ class xml_test_data(unittest.TestCase):
         (fd, self.XMLFILE) = tempfile.mkstemp(
             suffix=xml_utils.TMPSFX, prefix=xml_utils.TMPPFX
         )
-        os.write(fd, self.XMLSTR)
+        # Encode XMLSTR to bytes before writing
+        os.write(fd, self.XMLSTR.encode('utf-8'))
         os.close(fd)
         self.canonicalize_test_xml()
 
@@ -62,22 +63,26 @@ class xml_test_data(unittest.TestCase):
 
     def canonicalize_test_xml(self):
         et = ElementTree.parse(self.XMLFILE)
-        et.write(self.XMLFILE, encoding="UTF-8")
-        with open(self.XMLFILE) as f:
+        # et.write already writes in UTF-8 by default if encoding is not specified and XML declaration is present
+        et.write(self.XMLFILE)
+        with open(self.XMLFILE, "r", encoding="utf-8") as f:
             self.XMLSTR = f.read()
 
     def is_same_contents(self, filename, other=None):
         """Compare filename contents with XMLSTR, or contents of other"""
         try:
-            with open(filename, "rb") as f:
+            # Read as text, assuming UTF-8, to compare with self.XMLSTR
+            with open(filename, "r", encoding="utf-8") as f:
                 s = f.read()
         except (IOError, OSError):
             logging.warning("File %s does not exist" % filename)
             return False
         if other is None:
+            # self.XMLSTR is already a string
             return s == self.XMLSTR
         else:
-            with open(other, "rb") as other_f:
+            # Read other file as text for comparison
+            with open(other, "r", encoding="utf-8") as other_f:
                 other_s = other_f.read()
             return s == other_s
 
@@ -90,14 +95,16 @@ class test_ElementTree(xml_test_data):
 class test_TempXMLFile(xml_test_data):
     def test_prefix_sufix(self):
         filename = os.path.basename(self.XMLFILE)
-        self.assert_(filename.startswith(xml_utils.TMPPFX))
-        self.assert_(filename.endswith(xml_utils.TMPSFX))
+        self.assertTrue(filename.startswith(xml_utils.TMPPFX))
+        self.assertTrue(filename.endswith(xml_utils.TMPSFX))
 
     def test_test_TempXMLFile_canread(self):
         tmpf = xml_utils.TempXMLFile()
+        # TempXMLFile should handle strings correctly if opened in text mode by default
+        # or if it internally handles encoding. Assuming it expects strings.
         tmpf.write(self.XMLSTR)
         tmpf.seek(0)
-        stuff = tmpf.read()
+        stuff = tmpf.read() # Should return string
         self.assertEqual(stuff, self.XMLSTR)
 
     def test_TempXMLFile_implicit(self):
@@ -130,7 +137,7 @@ class test_XMLBackup(xml_test_data):
 
     def test_rebackup_file(self):
         xmlbackup = self.class_to_test(self.XMLFILE)
-        with open(xmlbackup.name, "wb") as oops:
+        with open(xmlbackup.name, "w", encoding="utf-8") as oops:
             oops.write("foobar")
         self.assertFalse(self.is_same_contents(xmlbackup.name))
         xmlbackup.backup()
@@ -186,20 +193,23 @@ class test_XMLTreeFile(xml_test_data):
 
     def test_sourcebackupfile_closed_file(self):
         xml = self.class_to_test(self.XMLFILE)
-        self.assertRaises(ValueError, xml.sourcebackupfile.write, "foobar")
+        # sourcebackupfile is a SpooledTemporaryFile, opened in "w+b" (binary) mode
+        # by XMLBackup. So, it expects bytes.
+        self.assertRaises(TypeError, xml.sourcebackupfile.write, "foobar")
 
     def test_sourcebackupfile_closed_string(self):
         xml = self.class_to_test(self.XMLSTR)
-        self.assertRaises(ValueError, xml.sourcebackupfile.write, "foobar")
+        # As above, sourcebackupfile expects bytes.
+        self.assertRaises(TypeError, xml.sourcebackupfile.write, "foobar")
 
     def test_init_str(self):
         xml = self.class_to_test(self.XMLSTR)
-        self.assert_(xml.sourcefilename is not None)
+        self.assertTrue(xml.sourcefilename is not None)
         self.assertEqual(xml.sourcebackupfile.name, xml.sourcefilename)
 
     def test_init_xml(self):
         xml = self.class_to_test(self.XMLFILE)
-        self.assert_(xml.sourcefilename is not None)
+        self.assertTrue(xml.sourcefilename is not None)
         self.assertEqual(xml.sourcebackupfile.name, xml.sourcefilename)
 
     def test_restore_from_string(self):

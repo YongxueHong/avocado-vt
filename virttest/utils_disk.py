@@ -76,34 +76,81 @@ def is_mount(src, dst=None, fstype=None, options=None, verbose=False, session=No
 
     :return: True if mounted, else return False
     """
-    mount_str = "%s %s %s" % (src, dst, fstype)
-    mount_str = mount_str.replace("None", "").strip()
-    mount_list_cmd = "cat /proc/mounts"
+    # Use src if dst is not provided, and vice-versa
+    check_path = src or dst
+    if not check_path:
+        if verbose:
+            LOG.info("Neither src nor dst is provided.")
+        return False
+
+    # Construct the findmnt command
+    # Output format: SOURCE TARGET FSTYPE OPTIONS
+    findmnt_cmd = (
+        f"findmnt --raw --noheadings --output SOURCE,TARGET,FSTYPE,OPTIONS {check_path}"
+    )
 
     if session:
-        mount_result = session.cmd_output_safe(mount_list_cmd)
-    else:
-        mount_result = process.run(mount_list_cmd, shell=True).stdout_text
-    if verbose:
-        LOG.debug("/proc/mounts contents:\n%s", mount_result)
-
-    for result in mount_result.splitlines():
-        if mount_str in result:
-            if options:
-                options = options.split(",")
-                options_result = result.split()[3].split(",")
-                for op in options:
-                    if op not in options_result:
-                        if verbose:
-                            LOG.info(
-                                "%s is not mounted with given" " option %s", src, op
-                            )
-                        return False
+        findmnt_result = session.cmd_status_output(findmnt_cmd, safe=True)
+        if findmnt_result[0] != 0:  # cmd_status_output returns (status, output)
             if verbose:
-                LOG.info("%s is mounted", src)
-            return True
+                LOG.info(
+                    f"findmnt command failed or {check_path} is not mounted. "
+                    f"Output: {findmnt_result[1]}"
+                )
+            return False
+        mount_output = findmnt_result[1]
+    else:
+        result_obj = process.run(findmnt_cmd, shell=True, ignore_status=True)
+        if result_obj.exit_status != 0:
+            if verbose:
+                LOG.info(
+                    f"findmnt command failed or {check_path} is not mounted. "
+                    f"Output: {result_obj.stderr_text or result_obj.stdout_text}"
+                )
+            return False
+        mount_output = result_obj.stdout_text
+
     if verbose:
-        LOG.info("%s is not mounted", src)
+        LOG.debug(f"findmnt output for {check_path}:\n{mount_output}")
+
+    for line in mount_output.splitlines():
+        parts = line.strip().split()
+        if not parts or len(parts) < 1:  # Expect at least SOURCE
+            continue
+
+        mounted_src = parts[0]
+        mounted_dst = parts[1] if len(parts) > 1 else None
+        mounted_fstype = parts[2] if len(parts) > 2 else None
+        mounted_options = parts[3] if len(parts) > 3 else ""
+
+        # Normalize src and dst by resolving real paths for comparison
+        # This helps when src or dst might be symlinks
+        real_src = os.path.realpath(src) if src else None
+        real_dst = os.path.realpath(dst) if dst else None
+        real_mounted_src = os.path.realpath(mounted_src)
+        real_mounted_dst = os.path.realpath(mounted_dst) if mounted_dst else None
+
+        src_match = (not src) or (real_src == real_mounted_src)
+        dst_match = (not dst) or (real_dst == real_mounted_dst)
+        fstype_match = (not fstype) or (fstype == mounted_fstype)
+
+        if src_match and dst_match and fstype_match:
+            if options:
+                required_options = set(options.split(","))
+                current_options = set(mounted_options.split(","))
+                if not required_options.issubset(current_options):
+                    if verbose:
+                        LOG.info(
+                            f"{check_path} is mounted but not with all required options. "
+                            f"Required: {options}, Actual: {mounted_options}"
+                        )
+                    continue  # Check next line if options don't match
+            if verbose:
+                LOG.info(f"{check_path} (resolved src: {real_src}, resolved dst: {real_dst}) is mounted.")
+            return True
+
+    if verbose:
+        LOG.info(f"{check_path} (resolved src: {real_src}, resolved dst: {real_dst}) is not mounted or does not match criteria.")
     return False
 
 
