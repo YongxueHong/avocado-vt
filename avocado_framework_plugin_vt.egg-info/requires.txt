@@ -1,0 +1,4 @@
+netifaces
+six
+aexpect
+avocado-framework>=82.1

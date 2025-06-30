@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: avocado-framework-plugin-vt
+Version: 109.0
+Summary: Avocado Plugin for Virtualization Testing
+Home-page: http://github.com/avocado-framework/avocado-vt
+Author: Avocado Developers
+Author-email: avocado-devel@redhat.com
+License-File: LICENSE
+Requires-Dist: netifaces
+Requires-Dist: six
+Requires-Dist: aexpect
+Requires-Dist: avocado-framework>=82.1
+Dynamic: author
+Dynamic: author-email
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: summary
