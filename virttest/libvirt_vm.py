@@ -31,7 +31,6 @@ from virttest import (
     test_setup,
     utils_logfile,
     utils_misc,
-    utils_net,
     utils_package,
     utils_selinux,
     virsh,
@@ -378,17 +377,6 @@ class VM(virt_vm.BaseVM):
                 os.remove(xml_file)
             LOG.error("Failed to backup xml file:\n%s", detail)
             return ""
-
-    def _get_address(self, index=0, ip_version="ipv4", session=None, timeout=60.0):
-        try:
-            return super()._get_address(index, ip_version, session, timeout)
-        except virt_vm.VMIPAddressMissingError:
-            if ip_version == "ipv4":
-                mac = self.get_mac_address(index).lower()
-                ipaddr = utils_net.obtain_guest_ip_from_domifaddr(self.name, mac)
-                self.address_cache[mac] = ipaddr
-                return ipaddr
-            return None
 
     def clone(
         self,
@@ -949,10 +937,10 @@ class VM(virt_vm.BaseVM):
                 if (
                     nettype
                     and nic_queues
-                    and has_sub_option("network", "driver_queues")
+                    and has_sub_option("network", "driver[._]queues")
                 ):
                     result += ",driver_queues=%s" % nic_queues
-                    if nic_driver and has_sub_option("network", "driver_name"):
+                    if nic_driver and has_sub_option("network", "driver[._]name"):
                         result += ",driver_name=%s" % nic_driver
                 elif mac:  # possible to specify --mac w/o --network
                     result += " --mac=%s" % mac
